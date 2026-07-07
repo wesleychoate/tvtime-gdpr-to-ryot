@@ -102,6 +102,13 @@ things aren't obvious from older docs/GitHub issue examples:
 - Watch dates (for both shows and movies) come from when TV Time recorded the
   event, not necessarily the moment you actually watched it.
 
+## About
+
+Built as a Claude Code collaboration — the schema archaeology in this README
+(the silent `CompleteExport` wrapper failure, the lowercase enum values, the
+`tracking-prod-records-v2.csv` under-counting bug) came out of debugging a
+real migration together, not a spec someone handed us.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
