@@ -8,11 +8,12 @@ seen_episode_source.csv in a current export. This script reads the files
 TV Time actually ships today instead:
 
   - followed_tv_show.csv          the list of shows you've followed
-  - watched_on_episode.csv        a full per-episode watch log, where TV Time
-                                   logged one (not guaranteed for every show)
-  - tracking-prod-records-v2.csv  a "last episode watched" marker per show,
-                                   used as a fallback when there's no
-                                   per-episode log
+  - tracking-prod-records-v2.csv  per-episode show watch events (one row per
+                                   episode watched, season_number/episode_number
+                                   populated directly) - this is the complete
+                                   history; it's a strict superset of
+                                   watched_on_episode.csv, which this script
+                                   does not need to read at all
   - tracking-prod-records.csv     movie watch/rewatch events (entity_type=movie)
 
 For each show it resolves a TMDB ID (handling TV Time's "Show Name (Year)"
@@ -27,7 +28,6 @@ Requires a TMDB read access token (v4 auth) in the TMDB_READ_ACCESS_TOKEN
 environment variable. Get one free at https://www.themoviedb.org/settings/api.
 """
 import argparse
-import ast
 import csv
 import json
 import os
@@ -47,46 +47,24 @@ def to_iso(dt_str):
     return dt_str.replace(" ", "T") + ".000Z"
 
 
-def parse_most_recent(raw):
-    # raw looks like: map[ep_id:1.081442e+07 ep_no:10 s_no:1 uuid:... watch_date:1.767e+15]
-    # space-separated key:value pairs inside map[...] -> needs commas before it's parseable
-    cleaned = raw.replace("[", "{").replace("]", "}").replace("map", "").replace(" ", ", ")
-    # some rows include a first_air_date field like 2022-07-13T00:00:00Z; its internal
-    # colons would otherwise collide with the key:value quoting regex below
-    cleaned = re.sub(r"(\d{4}-\d\d-\d\dT\d\d):(\d\d):(\d\dZ)", r"\1.\2.\3", cleaned)
-    cleaned = re.sub(r"([A-Za-z0-9_\-\+\.]+):([A-Za-z0-9_\-\+\.]+)", r'"\1":"\2"', cleaned)
-    d = ast.literal_eval(cleaned)
-    return int(float(d["s_no"])), int(float(d["ep_no"]))
-
-
 def load_export(data_dir: Path):
     full_history = {}  # show_name -> list of (season, episode, watched_at)
-    with open(data_dir / "watched_on_episode.csv", newline="") as f:
-        for row in csv.DictReader(f):
-            show = row["tv_show_name"]
-            full_history.setdefault(show, []).append(
-                (int(row["episode_season_number"]), int(row["episode_number"]), row["created_at"])
-            )
-
-    progress_marker = {}  # show_name -> (season, episode, watched_at)
     with open(data_dir / "tracking-prod-records-v2.csv", newline="") as f:
         for row in csv.DictReader(f):
             show = row["series_name"]
-            if not show or not row.get("most_recent_ep_watched"):
+            if not show or not row.get("season_number") or not row.get("episode_number"):
                 continue
-            try:
-                season, episode = parse_most_recent(row["most_recent_ep_watched"])
-            except (ValueError, SyntaxError):
-                continue
-            progress_marker[show] = (season, episode, row["updated_at"])
+            full_history.setdefault(show, []).append(
+                (int(row["season_number"]), int(row["episode_number"]), row["created_at"])
+            )
 
     followed = []
     with open(data_dir / "followed_tv_show.csv", newline="") as f:
         for row in csv.DictReader(f):
             followed.append(row["tv_show_name"])
 
-    all_shows = set(followed) | set(full_history) | set(progress_marker)
-    return all_shows, full_history, progress_marker
+    all_shows = set(followed) | set(full_history)
+    return all_shows, full_history
 
 
 def load_movies(data_dir: Path):
@@ -152,32 +130,20 @@ def tmdb_search_movie(movie_name, release_date):
     return results[0]["id"] if results else None
 
 
-def build_seen_history(show_name, full_history, progress_marker):
-    if show_name in full_history:
-        return [
-            {
-                "progress": "100",
-                "show_season_number": season,
-                "show_episode_number": episode,
-                "started_on": to_iso(watched_at),
-                "ended_on": to_iso(watched_at),
-                "state": "completed",
-            }
-            for season, episode, watched_at in sorted(full_history[show_name], key=lambda t: t[2])
-        ]
-    if show_name in progress_marker:
-        season, episode, watched_at = progress_marker[show_name]
-        return [
-            {
-                "progress": "100",
-                "show_season_number": season,
-                "show_episode_number": episode,
-                "started_on": to_iso(watched_at),
-                "ended_on": to_iso(watched_at),
-                "state": "completed",
-            }
-        ]
-    return []
+def build_seen_history(show_name, full_history):
+    if show_name not in full_history:
+        return []
+    return [
+        {
+            "progress": "100",
+            "show_season_number": season,
+            "show_episode_number": episode,
+            "started_on": to_iso(watched_at),
+            "ended_on": to_iso(watched_at),
+            "state": "completed",
+        }
+        for season, episode, watched_at in sorted(full_history[show_name], key=lambda t: t[2])
+    ]
 
 
 def main():
@@ -190,7 +156,7 @@ def main():
         print("error: TMDB_READ_ACCESS_TOKEN environment variable is not set", file=sys.stderr)
         sys.exit(1)
 
-    all_shows, full_history, progress_marker = load_export(args.export_dir)
+    all_shows, full_history = load_export(args.export_dir)
     movie_watch_events, movie_release_dates = load_movies(args.export_dir)
     print(f"{len(all_shows)} shows and {len(movie_watch_events)} watched movies to match against TMDB")
 
@@ -209,7 +175,7 @@ def main():
             not_found.append(show_name)
             continue
 
-        seen_history = build_seen_history(show_name, full_history, progress_marker)
+        seen_history = build_seen_history(show_name, full_history)
         ryot_json.append(
             {
                 "collections": [],

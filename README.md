@@ -26,16 +26,23 @@ From the root of your unzipped GDPR export:
 | File | Used for |
 |---|---|
 | `followed_tv_show.csv` | The full list of shows you've followed |
-| `watched_on_episode.csv` | A per-episode watch log, timestamped — used when TV Time logged one for a show |
-| `tracking-prod-records-v2.csv` | A single "last episode watched" marker per show — fallback for shows with no per-episode log |
+| `tracking-prod-records-v2.csv` | Full per-episode show watch history |
 | `tracking-prod-records.csv` | Movie watch/rewatch events (`entity_type=movie`) |
 
-Not every show will have full per-episode history — TV Time appears to have
-only logged granular per-episode events for some shows/some time ranges. Shows
-with only a "last watched" marker get imported as a single "watched through
-season X episode Y" entry rather than a full backlog. Shows with no watch
-signal at all are still imported (so you keep your list), just with no
-progress data.
+`tracking-prod-records-v2.csv` is oddly shaped: most rows in it are one-per-
+episode watch events with `season_number`/`episode_number` populated directly,
+but there's also a separate aggregate row per show with a `most_recent_ep_watched`
+field (a stringified Go map) meant to represent "last thing you watched here."
+An earlier version of this script only parsed that aggregate row — which
+meant every show came through as a single "watched through season X episode Y"
+marker instead of its actual history. Don't do that; the per-episode rows are
+already a strict superset of the aggregate marker (verified: no show has a
+marker without matching per-episode rows) and also a strict superset of
+`watched_on_episode.csv`, an older/thinner per-episode log this script
+doesn't need to read at all. Just group the per-episode rows by `series_name`.
+
+Shows with no watch signal at all in the export are still imported (so you
+keep your full list), just with empty `seen_history`.
 
 Movies are matched separately against `/search/movie` on TMDB, using the
 release year from the export to disambiguate when it's available — TV Time
