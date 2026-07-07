@@ -28,6 +28,7 @@ From the root of your unzipped GDPR export:
 | `followed_tv_show.csv` | The full list of shows you've followed |
 | `watched_on_episode.csv` | A per-episode watch log, timestamped — used when TV Time logged one for a show |
 | `tracking-prod-records-v2.csv` | A single "last episode watched" marker per show — fallback for shows with no per-episode log |
+| `tracking-prod-records.csv` | Movie watch/rewatch events (`entity_type=movie`) |
 
 Not every show will have full per-episode history — TV Time appears to have
 only logged granular per-episode events for some shows/some time ranges. Shows
@@ -35,6 +36,13 @@ with only a "last watched" marker get imported as a single "watched through
 season X episode Y" entry rather than a full backlog. Shows with no watch
 signal at all are still imported (so you keep your list), just with no
 progress data.
+
+Movies are matched separately against `/search/movie` on TMDB, using the
+release year from the export to disambiguate when it's available — TV Time
+uses `0001-01-01` as a sentinel for "unknown release date" on some older
+entries, which the script treats as no year rather than a literal filter.
+Rewatches produce a second `seen_history` entry rather than being collapsed
+into one.
 
 ## Setup
 
@@ -81,11 +89,12 @@ things aren't obvious from older docs/GitHub issue examples:
 
 ## Limitations
 
-- Only shows (`lot: "show"`) are handled — TV Time doesn't track movies, so
-  there was nothing to add for that `lot`.
 - TMDB matching is name-based (TV Time's export doesn't carry TMDB IDs), so a
-  handful of shows with ambiguous or reused names may need manual correction
-  after import.
+  handful of shows/movies with ambiguous or reused names may need manual
+  correction after import.
+- Movie watch dates come from when you marked them watched in TV Time, not
+  necessarily when you actually watched them (same caveat applies to show
+  progress markers pulled from `tracking-prod-records-v2.csv`).
 
 ## License
 

@@ -13,6 +13,7 @@ TV Time actually ships today instead:
   - tracking-prod-records-v2.csv  a "last episode watched" marker per show,
                                    used as a fallback when there's no
                                    per-episode log
+  - tracking-prod-records.csv     movie watch/rewatch events (entity_type=movie)
 
 For each show it resolves a TMDB ID (handling TV Time's "Show Name (Year)"
 disambiguation suffix, which throws off a plain TMDB search) and writes a
@@ -88,6 +89,27 @@ def load_export(data_dir: Path):
     return all_shows, full_history, progress_marker
 
 
+def load_movies(data_dir: Path):
+    # movie_watch_events: movie_name -> list of watched_at timestamps (watch + rewatch)
+    # movie_release_dates: movie_name -> release_date, used to disambiguate TMDB search
+    movie_watch_events = {}
+    movie_release_dates = {}
+    path = data_dir / "tracking-prod-records.csv"
+    if not path.exists():
+        return movie_watch_events, movie_release_dates
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("entity_type") != "movie" or row.get("type") not in ("watch", "rewatch"):
+                continue
+            name = row["movie_name"]
+            if not name:
+                continue
+            movie_watch_events.setdefault(name, []).append(row["created_at"])
+            if row.get("release_date"):
+                movie_release_dates[name] = row["release_date"]
+    return movie_watch_events, movie_release_dates
+
+
 YEAR_SUFFIX = re.compile(r"^(.*)\s\((\d{4})\)$")
 
 
@@ -107,6 +129,24 @@ def tmdb_search(show_name):
             return by_year[0]["id"]
 
     exact = [r for r in results if r["name"] == query]
+    if exact:
+        return exact[0]["id"]
+    return results[0]["id"] if results else None
+
+
+def tmdb_search_movie(movie_name, release_date):
+    # TV Time uses 0001-01-01 as a sentinel for "unknown release date"
+    year = release_date[:4] if release_date and not release_date.startswith("0001") else None
+
+    url = "https://api.themoviedb.org/3/search/movie"
+    params = {"query": movie_name, "include_adult": "false", "language": "en-US", "page": 1}
+    if year:
+        params["year"] = year
+    resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+
+    exact = [r for r in results if r["title"] == movie_name]
     if exact:
         return exact[0]["id"]
     return results[0]["id"] if results else None
@@ -151,7 +191,8 @@ def main():
         sys.exit(1)
 
     all_shows, full_history, progress_marker = load_export(args.export_dir)
-    print(f"{len(all_shows)} shows to match against TMDB")
+    movie_watch_events, movie_release_dates = load_movies(args.export_dir)
+    print(f"{len(all_shows)} shows and {len(movie_watch_events)} watched movies to match against TMDB")
 
     ryot_json = []
     not_found = []
@@ -159,12 +200,12 @@ def main():
         try:
             tmdb_id = tmdb_search(show_name)
         except requests.RequestException as e:
-            print(f"[{i}/{len(all_shows)}] {show_name}: TMDB request failed ({e})")
+            print(f"[show {i}/{len(all_shows)}] {show_name}: TMDB request failed ({e})")
             not_found.append(show_name)
             continue
 
         if tmdb_id is None:
-            print(f"[{i}/{len(all_shows)}] {show_name}: no TMDB match")
+            print(f"[show {i}/{len(all_shows)}] {show_name}: no TMDB match")
             not_found.append(show_name)
             continue
 
@@ -180,19 +221,50 @@ def main():
                 "seen_history": seen_history,
             }
         )
-        print(f"[{i}/{len(all_shows)}] {show_name} -> TMDB {tmdb_id} ({len(seen_history)} episodes)")
+        print(f"[show {i}/{len(all_shows)}] {show_name} -> TMDB {tmdb_id} ({len(seen_history)} episodes)")
         time.sleep(0.05)  # stay well under TMDB's rate limit
+
+    for i, (movie_name, watched_ats) in enumerate(sorted(movie_watch_events.items()), 1):
+        try:
+            tmdb_id = tmdb_search_movie(movie_name, movie_release_dates.get(movie_name))
+        except requests.RequestException as e:
+            print(f"[movie {i}/{len(movie_watch_events)}] {movie_name}: TMDB request failed ({e})")
+            not_found.append(movie_name)
+            continue
+
+        if tmdb_id is None:
+            print(f"[movie {i}/{len(movie_watch_events)}] {movie_name}: no TMDB match")
+            not_found.append(movie_name)
+            continue
+
+        seen_history = [
+            {"progress": "100", "started_on": to_iso(watched_at), "ended_on": to_iso(watched_at), "state": "completed"}
+            for watched_at in sorted(watched_ats)
+        ]
+        ryot_json.append(
+            {
+                "collections": [],
+                "identifier": str(tmdb_id),
+                "lot": "movie",
+                "reviews": [],
+                "source": "tmdb",
+                "source_id": str(tmdb_id),
+                "seen_history": seen_history,
+            }
+        )
+        print(f"[movie {i}/{len(movie_watch_events)}] {movie_name} -> TMDB {tmdb_id} ({len(seen_history)} watch(es))")
+        time.sleep(0.05)
 
     # Ryot's Generic JSON importer expects a CompleteExport object, not a bare array
     complete_export = {"metadata": ryot_json}
     with open(args.output, "w") as f:
         json.dump(complete_export, f, indent=2)
 
-    print(f"\nWrote {len(ryot_json)} shows to {args.output}")
+    print(f"\nWrote {len(ryot_json)} items to {args.output}")
     if not_found:
-        print(f"\n{len(not_found)} shows need manual TMDB lookup (name mismatch or removed from TMDB):")
-        for show in not_found:
-            print(f"  - {show}")
+        print(f"\n{len(not_found)} items need manual TMDB lookup (name mismatch or removed from TMDB):")
+        for name in not_found:
+            print(f"  - {name}")
 
 
 if __name__ == "__main__":
