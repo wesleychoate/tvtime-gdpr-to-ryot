@@ -1,8 +1,8 @@
 # tvtime-gdpr-to-ryot
 
 Convert a [TV Time](https://www.tvtime.com/) GDPR data export into a JSON file
-importable by [Ryot](https://github.com/IgnisDa/ryot), the self-hosted media
-tracker.
+importable by [Ryot](https://ryot.io) ([GitHub](https://github.com/IgnisDa/ryot)),
+the self-hosted media tracker.
 
 TV Time shut down in July 2026. A couple of community scripts already exist
 for this migration — [SirMartin/TvTimeToRyot](https://github.com/SirMartin/TvTimeToRyot)
@@ -99,9 +99,8 @@ things aren't obvious from older docs/GitHub issue examples:
 - TMDB matching is name-based (TV Time's export doesn't carry TMDB IDs), so a
   handful of shows/movies with ambiguous or reused names may need manual
   correction after import.
-- Movie watch dates come from when you marked them watched in TV Time, not
-  necessarily when you actually watched them (same caveat applies to show
-  progress markers pulled from `tracking-prod-records-v2.csv`).
+- Watch dates (for both shows and movies) come from when TV Time recorded the
+  event, not necessarily the moment you actually watched it.
 
 ## License
 
